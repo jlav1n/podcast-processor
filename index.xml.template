@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/DTDs/Podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+     <title>Josh's Feeds</title>
+     <description>Random podcasts</description>
+     <itunes:author>Josh Lavin</itunes:author>
+     <link>https://joshlavin.com/feeds/</link>
+     <!-- <itunes:image href="http://www.yourserver.com/YourPodcastPicture.jpg" /> -->
+     <pubDate>Sat, 06 Apr 2019 09:00:00 PST </pubDate>
+     <language>en-us</language>
+</channel>
+</rss>

@@ -1,157 +1,85 @@
 # Podcast Script GCP Cloud Run Deployment Guide
 
 ## Overview
-This guide walks you through deploying your podcast processing script to Google Cloud Run with event-driven processing via GCS file uploads.
+This guide walks you through deploying your podcast processing script to Google Cloud Run with event-driven processing via GCS file uploads. We use **Terraform** to automate the entire setup.
 
 ## Prerequisites
 - GCP project with billing enabled
-- `gcloud` CLI installed and configured
-- Docker installed locally (for testing)
-- Service account with appropriate permissions
+- `gcloud` CLI installed and configured (`gcloud auth login`)
+- **Terraform** installed (>= 1.0) - https://www.terraform.io/downloads.html
+- Docker installed locally
+- `gsutil` for GCS operations
 
-## Setup Steps
+## Quick Start with Terraform (Recommended)
 
-### 1. Create GCS Buckets
+### 1. Configure Variables
 
 ```bash
-# Bucket for audio files
-gsutil mb gs://your-podcast-files
-
-# (Optional) Separate bucket for index.xml if you prefer
-gsutil mb gs://your-podcast-feeds
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
 ```
 
-### 2. Create Service Account
-
-```bash
-# Create service account
-gcloud iam service-accounts create podcast-processor \
-    --display-name="Podcast Processor"
-
-# Grant GCS permissions
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-    --member="serviceAccount:podcast-processor@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/storage.objectAdmin"
-
-# Grant Cloud Run invoke permissions
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-    --member="serviceAccount:podcast-processor@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-    --role="roles/run.invoker"
-
-# Allow your user account to impersonate the service account
-gcloud iam service-accounts add-iam-policy-binding \
-    podcast-processor@YOUR_PROJECT_ID.iam.gserviceaccount.com \
-    --member="user:YOUR_EMAIL@gmail.com" \
-    --role="roles/iam.serviceAccountUser"
-
-gcloud iam service-accounts add-iam-policy-binding \
-    podcast-processor@YOUR_PROJECT_ID.iam.gserviceaccount.com \
-    --member="user:YOUR_EMAIL@gmail.com" \
-    --role="roles/iam.serviceAccountTokenCreator"
+Edit `terraform.tfvars` with your values:
+```hcl
+project_id      = "your-project-id"
+region          = "us-central1"
+admin_email     = "your-email@gmail.com"
+gcs_bucket_name = "your-podcast-files-unique"  # Must be globally unique
+container_image = "gcr.io/your-project-id/podcast-processor:latest"
 ```
 
-**Note**: Replace `YOUR_EMAIL@gmail.com` with your actual Google account email.
+### 2. Build & Push Container Image
 
-### 3. Build and Push Docker Image
+From repository root:
 
 ```bash
-# Set variables
-export PROJECT_ID=your-project-id
-export REGION=us-central1
-export IMAGE_NAME=podcast-processor
+export PROJECT_ID=$(gcloud config get-value project)
 
-# Build image
-docker build -t gcr.io/$PROJECT_ID/$IMAGE_NAME:latest .
-
-# Configure Docker auth
+docker build -t gcr.io/$PROJECT_ID/podcast-processor:latest .
 gcloud auth configure-docker
-
-# Push to Container Registry
-docker push gcr.io/$PROJECT_ID/$IMAGE_NAME:latest
+docker push gcr.io/$PROJECT_ID/podcast-processor:latest
 ```
 
-### 4. Deploy to Cloud Run
+### 3. Deploy with Terraform
 
 ```bash
-gcloud run deploy podcast-processor \
-    --image gcr.io/$PROJECT_ID/$IMAGE_NAME:latest \
-    --platform managed \
-    --region $REGION \
-    --memory 512Mi \
-    --timeout 3600 \
-    --service-account podcast-processor@$PROJECT_ID.iam.gserviceaccount.com \
-    --set-env-vars GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=your-podcast-files,GCS_INDEX_OBJECT=index.xml \
-    --allow-unauthenticated \
-    --no-gen2
+cd terraform
+terraform init
+terraform plan
+terraform apply
 ```
 
-### 5. Set Up Event-Driven Processing (Eventarc)
+Type `yes` to confirm. Terraform will create:
+- Service account with proper IAM bindings
+- GCS bucket for audio files
+- Cloud Run service (512MB, 1 CPU)
+- Eventarc trigger for automatic file processing
+- All necessary permissions
+
+### 4. Get Your Feed URL
+
+After successful deployment, Terraform outputs the feed URL:
 
 ```bash
-# Enable required APIs
-gcloud services enable eventarc.googleapis.com
-gcloud services enable cloudrun.googleapis.com
-
-# Create Eventarc trigger for GCS uploads
-gcloud eventarc triggers create podcast-upload-trigger \
-    --location=$REGION \
-    --destination-run-service=podcast-processor \
-    --destination-run-region=$REGION \
-    --event-filters="type=google.cloud.storage.object.v1.finalized" \
-    --event-filters="bucket=your-podcast-files" \
-    --service-account=podcast-processor@$PROJECT_ID.iam.gserviceaccount.com
+terraform output podcast_feed_url
 ```
 
-### 6. Set Up Custom Domain (Optional)
+Example: `https://podcast-processor-xxxxx.run.app/`
 
-For `podcast.joshlavin.com`:
+Use this URL in your podcast app.
 
-```bash
-# Add Cloud Run domain mapping
-gcloud run domain-mappings create \
-    --service=podcast-processor \
-    --domain=podcast.joshlavin.com \
-    --region=$REGION
+## Manual Deployment (Alternative)
 
-# Follow DNS setup instructions in output
-# You'll need to create DNS records pointing to Cloud Run
-```
-
-### 7. Update Your Podcast App
-
-Use this URL in your podcast app:
-```
-https://podcast.joshlavin.com/
-```
-
-Or if not using custom domain:
-```
-https://podcast-processor-XXXXX.run.app/
-```
-
-## Manual Processing
-
-To manually trigger processing when needed:
-
-```bash
-# Build a Cloud Build job to run the processor
-gcloud builds submit . \
-    --config=cloudbuild.yaml \
-    --substitutions _BUCKET=your-podcast-files
-```
-
-Or invoke Cloud Run directly:
-
-```bash
-gcloud run jobs create process-podcast \
-    --image=gcr.io/$PROJECT_ID/podcast-processor \
-    --service-account=podcast-processor@$PROJECT_ID.iam.gserviceaccount.com \
-    --set-env-vars GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=your-podcast-files
-
-gcloud run jobs execute process-podcast
-```
+If you prefer not to use Terraform, see [MANUAL_DEPLOYMENT.md](./MANUAL_DEPLOYMENT.md) for step-by-step `gcloud` commands.
 
 ## Testing Locally
+
+### Prerequisites
+Install Perl dependencies:
+
+```bash
+cpan MP3::Info MP4::Info Google::Cloud::Storage Plack Plack::Runner JSON::PP
+```
 
 ### Option 1: Use Application Default Credentials (Recommended)
 
@@ -160,63 +88,182 @@ gcloud run jobs execute process-podcast
 gcloud auth application-default login
 
 # Set environment variables
-export GCP_PROJECT_ID=your-project-id
-export GCS_BUCKET=your-podcast-files
+export GCP_PROJECT_ID=$(gcloud config get-value project)
+export GCS_BUCKET=$(terraform output -raw gcs_bucket_name)
 
-# Run processor script
+# Test processor script
 perl process_podcast.pl
 
-# Run HTTP server
+# Run HTTP server (default port 5000)
 perl server.pl
-```
-
-### Option 2: Use Service Account Impersonation
-
-```bash
-# Authenticate and set impersonation
-gcloud auth application-default login
-gcloud config set auth/impersonate_service_account podcast-processor@YOUR_PROJECT_ID.iam.gserviceaccount.com
-
-# Set environment variables
-export GCP_PROJECT_ID=your-project-id
-export GCS_BUCKET=your-podcast-files
-
-# Run processor script
-perl process_podcast.pl
 ```
 
 Visit `http://localhost:5000/` to see your feed.
 
+### Option 2: Use Service Account Impersonation
+
+```bash
+gcloud auth application-default login
+export SERVICE_ACCOUNT=$(terraform output -raw service_account_email)
+gcloud config set auth/impersonate_service_account $SERVICE_ACCOUNT
+
+# Set environment variables
+export GCP_PROJECT_ID=$(gcloud config get-value project)
+export GCS_BUCKET=$(terraform output -raw gcs_bucket_name)
+
+perl process_podcast.pl
+perl server.pl
+```
+
 ## Workflow
 
-1. **Upload MP3 to GCS**: Drop new files in `gs://your-podcast-files/files/SOMETHING/`
-2. **Eventarc trigger fires**: Automatically triggers Cloud Run
-3. **Processing runs**: Script processes new MP3s
+1. **Upload MP3 to GCS**: Drop new files in `gs://bucket-name/files/SOMETHING/`
+   ```bash
+   gsutil cp my-podcast.mp3 gs://bucket-name/files/test/
+   ```
+
+2. **Eventarc trigger fires**: Automatically triggers Cloud Run within seconds
+
+3. **Processing runs**: Script reads MP3 metadata and processes files
+
 4. **index.xml updates**: Updated feed is stored in GCS
+
 5. **Podcast app fetches**: Your podcast app fetches the latest feed from Cloud Run endpoint
+
 6. **New episodes appear**: Done!
+
+## Managing the Deployment
+
+### View Logs
+
+```bash
+# Cloud Run logs
+gcloud run logs read podcast-processor --limit 50 --region us-central1
+
+# Eventarc logs
+gcloud eventarc triggers describe podcast-upload-trigger --location us-central1
+```
+
+### Monitor GCS Bucket
+
+```bash
+gsutil ls -r gs://$(terraform output -raw gcs_bucket_name)/
+```
+
+### Update Container Image
+
+If you rebuild the container:
+
+```bash
+docker push gcr.io/$PROJECT_ID/podcast-processor:latest
+terraform apply  # Terraform detects image change and redeploys
+```
+
+### Destroy All Resources
+
+⚠️ **Warning**: This deletes everything including the GCS bucket. Backup first!
+
+```bash
+cd terraform
+terraform destroy
+```
+
+## Setting Up Custom Domain (Optional)
+
+For `podcast.joshlavin.com`:
+
+```bash
+# Get Cloud Run service URL
+CLOUD_RUN_URL=$(terraform output -raw cloud_run_url)
+
+# Add Cloud Run domain mapping
+gcloud run domain-mappings create \
+    --service=podcast-processor \
+    --domain=podcast.joshlavin.com \
+    --region=us-central1
+
+# Follow DNS setup instructions from output
+# You'll need to create DNS records in your domain registrar
+```
 
 ## Cost Estimation
 
-- **Cloud Run**: ~$0.20/month (with generous free tier)
+- **Cloud Run**: ~$0.20/month (generous free tier covers this)
 - **GCS Storage**: ~$0.02/GB/month
 - **Eventarc**: Free for first 100k events/month
+- **Terraform State**: Free if stored locally
 
-Total: Very cheap for a personal podcast!
+**Total**: Very cheap for a personal podcast! Likely free on free tier.
 
 ## Troubleshooting
 
-Check Cloud Run logs:
+### Script won't process files
+
 ```bash
-gcloud run logs read podcast-processor --limit 50
+# Check Cloud Run logs
+gcloud run logs read podcast-processor --limit 100 --region us-central1
+
+# Verify bucket exists
+gsutil ls gs://$(terraform output -raw gcs_bucket_name)/
+
+# Check Eventarc trigger is configured
+gcloud eventarc triggers list --location us-central1
 ```
 
-Check Eventarc trigger status:
+### Feed won't load
+
 ```bash
-gcloud eventarc triggers describe podcast-upload-trigger --location=$REGION
+# Test the endpoint directly
+curl $(terraform output -raw cloud_run_url)
+
+# Check if index.xml exists in GCS
+gsutil cat gs://$(terraform output -raw gcs_bucket_name)/index.xml
 ```
 
-Monitor GCS bucket:
+### Service account permissions issues
+
 ```bash
-gsutil ls -r gs://your-podcast-files/
+# Check service account exists
+gcloud iam service-accounts list
+
+# Check IAM bindings
+gcloud projects get-iam-policy $(gcloud config get-value project) \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:podcast-processor"
 ```
+
+## Terraform State Management
+
+By default, state is stored locally in `terraform.tfstate`. For team environments or better safety, use remote state:
+
+```bash
+# Create GCS bucket for state (one-time)
+gsutil mb gs://terraform-state-$(gcloud config get-value project)
+
+# Add to terraform/main.tf:
+terraform {
+  backend "gcs" {
+    bucket = "terraform-state-YOUR_PROJECT"
+    prefix = "podcast-processor"
+  }
+}
+
+# Reinitialize
+terraform init
+```
+
+## API Endpoints
+
+Once deployed, Cloud Run exposes these endpoints:
+
+- `GET /` - Serve podcast feed (XML)
+- `GET /feed` - Alias for podcast feed
+- `GET /index.xml` - Direct access to index.xml
+- `POST /process` - Webhook for manual triggering (if integrated with Cloud Scheduler)
+- `GET /health` - Health check endpoint
+
+## Additional Resources
+
+- [Terraform Configuration](./terraform/README.md) - Detailed Terraform docs
+- [Process Script](./process_podcast.pl) - MP3 processing logic
+- [Server Script](./server.pl) - HTTP endpoint serving logic

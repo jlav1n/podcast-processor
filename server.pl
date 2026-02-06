@@ -6,15 +6,11 @@ use warnings;
 use Plack::Runner;
 use Plack::Request;
 use Plack::Response;
-use Google::Cloud::Storage;
 use JSON::PP;
+use LWP::UserAgent;
 
-my $project_id = $ENV{GCP_PROJECT_ID} or die "GCP_PROJECT_ID not set";
 my $bucket_name = $ENV{GCS_BUCKET} or die "GCS_BUCKET not set";
 my $index_object = $ENV{GCS_INDEX_OBJECT} || "index.xml";
-
-my $storage = Google::Cloud::Storage->new(project => $project_id);
-my $bucket = $storage->bucket($bucket_name);
 
 # Cache index.xml content with TTL
 my ($cached_content, $cache_time) = (undef, 0);
@@ -28,18 +24,19 @@ sub get_index_xml {
         return $cached_content;
     }
     
-    # Fetch from GCS
-    eval {
-        my $obj = $bucket->object($index_object);
-        $cached_content = $obj->download_as_string;
+    # Fetch from GCS using signed URL
+    my $gcs_url = "https://storage.googleapis.com/$bucket_name/$index_object";
+    my $ua = LWP::UserAgent->new;
+    my $response = $ua->get($gcs_url);
+    
+    if ($response->is_success) {
+        $cached_content = $response->content;
         $cache_time = $now;
         return $cached_content;
-    };
-    
-    if ($@) {
-        warn "Error fetching index.xml: $@\n";
-        return undef;
     }
+    
+    warn "Error fetching index.xml from GCS: " . $response->status_line . "\n";
+    return undef;
 }
 
 my $app = sub {
@@ -90,4 +87,5 @@ my $app = sub {
 # Run on Cloud Run PORT (default 8080)
 my $port = $ENV{PORT} || 8080;
 my $runner = Plack::Runner->new;
+$runner->parse_options('--listen', "0.0.0.0:$port");
 $runner->run($app);

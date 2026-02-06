@@ -6,7 +6,6 @@ use warnings;
 use MP3::Info 'get_mp3info';
 use MP4::Info 'get_mp4info';
 use POSIX 'strftime';
-use Google::Cloud::Storage;
 
 ##
 ## Processes MP3 files from a GCS bucket and updates index.xml
@@ -17,12 +16,8 @@ use Google::Cloud::Storage;
 ##   - GCS_INDEX_OBJECT: Path to index.xml in bucket (e.g., "index.xml")
 ##
 
-my $project_id = $ENV{GCP_PROJECT_ID} or die "GCP_PROJECT_ID not set";
 my $bucket_name = $ENV{GCS_BUCKET} or die "GCS_BUCKET not set";
 my $index_object = $ENV{GCS_INDEX_OBJECT} || "index.xml";
-
-my $storage = Google::Cloud::Storage->new(project => $project_id);
-my $bucket = $storage->bucket($bucket_name);
 
 my $xml = <<EOX;
      <item>
@@ -32,17 +27,24 @@ my $xml = <<EOX;
      </item>
 EOX
 
-# Get list of objects in GCS bucket (e.g., files/SOMETHING/*.mp3)
+# Get list of objects in GCS bucket using gsutil
 my @out;
-my @objects = $bucket->objects(prefix => 'files/');
+my $list_cmd = "gsutil ls -r gs://$bucket_name/files/";
+my @objects = `$list_cmd`;
+die "Failed to list GCS objects: $?" if $?;
 
-while (my $obj = $objects->next) {
-    my $file = $obj->name;
+foreach my $file (@objects) {
+    chomp $file;
+    next if $file =~ /\/$/;  # Skip directories
     next unless $file =~ /\.(mp3|m4a)$/i;
+    
+    # Extract just the path part from gs://bucket/path
+    my $path = $file;
+    $path =~ s/^gs:\/\/$bucket_name\///;
     
     warn "Processing: $file\n";
     
-    my $title = $file;
+    my $title = $path;
     $title =~ s/.*\/(.*)\.(?:mp3|m4a)/$1/i;
     $title =~ s/[_\d]/ /g;
     $title =~ s/\s+$//;
@@ -51,7 +53,8 @@ while (my $obj = $objects->next) {
     
     # Download file temporarily to get metadata
     my $temp_file = "/tmp/$title.tmp";
-    $obj->download({ file => $temp_file });
+    system("gsutil", "cp", $file, $temp_file);
+    die "Failed to download $file" if $?;
     
     my $info;
     if ($file =~ /\.mp3$/i) {
@@ -62,7 +65,7 @@ while (my $obj = $objects->next) {
     
     die "Failed to get info for $file: $@" if $@;
     
-    push @out, sprintf $xml, $title, $date, $file, $info->{SIZE};
+    push @out, sprintf $xml, $title, $date, $path, $info->{SIZE};
     
     unlink $temp_file;
     
@@ -73,27 +76,38 @@ while (my $obj = $objects->next) {
 # Read existing index.xml from GCS if it exists
 my @existing_lines;
 eval {
-    my $index_obj = $bucket->object($index_object);
-    my $content = $index_obj->download_as_string;
-    @existing_lines = split /\n/, $content;
-    
-    # Remove closing tags from the end
-    while (@existing_lines && $existing_lines[-1] =~ /^\s*<\/(channel|rss)>\s*$/) {
-        pop @existing_lines;
+    my $temp_index = "/tmp/index.xml.tmp";
+    system("gsutil", "cp", "gs://$bucket_name/$index_object", $temp_index);
+    if (-e $temp_index) {
+        open my $fh, '<', $temp_index or die "Cannot open $temp_index: $!";
+        @existing_lines = <$fh>;
+        close $fh;
+        unlink $temp_index;
+        
+        # Remove closing tags from the end
+        while (@existing_lines && $existing_lines[-1] =~ /^\s*<\/(channel|rss)>\s*$/) {
+            pop @existing_lines;
+        }
     }
 };
 
 # Build new index.xml
 my $new_content = '';
 if (@existing_lines) {
-    $new_content = join "\n", @existing_lines;
-    $new_content .= "\n";
+    $new_content = join '', @existing_lines;
 }
 $new_content .= join "\n", @out;
 $new_content .= "\n</channel>\n</rss>\n";
 
 # Write updated index.xml back to GCS
-my $index_obj = $bucket->object($index_object);
-$index_obj->upload($new_content, { content_type => 'application/xml' });
+my $temp_index = "/tmp/index.xml.new";
+open my $fh, '>', $temp_index or die "Cannot write to $temp_index: $!";
+print $fh $new_content;
+close $fh;
+
+system("gsutil", "cp", $temp_index, "gs://$bucket_name/$index_object");
+die "Failed to upload index.xml" if $?;
+
+unlink $temp_index;
 
 warn "Updated $index_object in GCS bucket\n";
