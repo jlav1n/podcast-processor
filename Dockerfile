@@ -1,34 +1,36 @@
-# Perl base image with dependencies for audio processing
-FROM perl:5.36
+# Perl slim image - much smaller than full perl
+FROM perl:5.36-slim
 
-# Install system dependencies for MP3/MP4 processing
-RUN apt-get update && apt-get install -y \
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libmp3-info-perl \
     libmp4-info-perl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Perl modules
-RUN cpan -i \
+RUN cpan -iT \
     MP3::Info \
     MP4::Info \
-    Google::Cloud::Storage
+    Google::Cloud::Storage \
+    Plack \
+    Plack::Runner \
+    JSON::PP \
+    LWP::UserAgent
+
+# Remove build tools to reduce size
+RUN apt-get remove -y build-essential && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy podcast processing script
+# Copy application files
 COPY process_podcast.pl .
-
-# Copy existing index.xml template
 COPY index.xml.template .
-
-# Cloud Run port
-ENV PORT=8080
-
-# Copy HTTP server script
 COPY server.pl .
 
-# Health check
+ENV PORT=8080
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD perl -e "use LWP::UserAgent; my $ua = LWP::UserAgent->new; exit($ua->get('http://localhost:8080/health')->is_success ? 0 : 1)"
 
