@@ -1,0 +1,15 @@
+# Copy this file to terraform.tfvars and fill in your values
+# then run: terraform init && terraform plan && terraform apply
+
+project_id = "YOUR_PROJECT_ID"
+region     = "us-central1"
+
+admin_email = "your-email@gmail.com"
+
+# Bucket names must be globally unique
+gcs_bucket_name = "your-podcast-files-unique-name"
+
+# Container image - build and push this first:
+# docker build -t gcr.io/YOUR_PROJECT_ID/podcast-processor:latest .
+# docker push gcr.io/YOUR_PROJECT_ID/podcast-processor:latest
+container_image = "gcr.io/YOUR_PROJECT_ID/podcast-processor:latest"
