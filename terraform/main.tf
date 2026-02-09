@@ -68,7 +68,7 @@ resource "google_service_account_iam_member" "token_creator" {
   member             = "user:${var.admin_email}"
 }
 
-# GCS Bucket for audio files
+# GCS Bucket for audio files (not public)
 resource "google_storage_bucket" "podcast_files" {
   name          = var.gcs_bucket_name
   location      = var.region
