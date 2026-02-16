@@ -35,10 +35,14 @@ From repository root:
 ```bash
 export PROJECT_ID=$(gcloud config get-value project)
 
-docker build -t gcr.io/$PROJECT_ID/podcast-processor:latest .
+docker build -t gcr.io/$(gcloud config get-value project)/podcast-processor:latest .
 gcloud auth configure-docker
-docker push gcr.io/$PROJECT_ID/podcast-processor:latest
+docker push gcr.io/$(gcloud config get-value project)/podcast-processor:latest
 ```
+
+#### TODO 
+
+Use `gcloud builds submit --tag <TAG> .` ?
 
 ### 3. Deploy with Terraform
 

@@ -27,7 +27,12 @@ variable "service_name" {
 }
 
 variable "gcs_bucket_name" {
-  description = "Name for the GCS bucket (must be globally unique)"
+  description = "Name for the GCS bucket for podcast audio files (must be globally unique)"
+  type        = string
+}
+
+variable "gcs_cloudrun_bucket_name" {
+  description = "Name for the GCS bucket for CloudRun"
   type        = string
 }
 

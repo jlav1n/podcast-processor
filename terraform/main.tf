@@ -68,6 +68,13 @@ resource "google_service_account_iam_member" "token_creator" {
   member             = "user:${var.admin_email}"
 }
 
+# Allow CloudRun SA self-impersonation (required for GCS SignedURL usage)
+resource "google_service_account_iam_member" "cloudrun_token_creator" {
+  service_account_id = google_service_account.podcast_processor.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = google_service_account.podcast_processor.member
+}
+
 # GCS Bucket for audio files (not public)
 resource "google_storage_bucket" "podcast_files" {
   name          = var.gcs_bucket_name
@@ -79,6 +86,21 @@ resource "google_storage_bucket" "podcast_files" {
   }
 
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+}
+
+# GCS Bucket for CloudRun files (not public)
+resource "google_storage_bucket" "podcast_cloudrun_files" {
+  name          = var.gcs_cloudrun_bucket_name
+  location      = var.region
+  force_destroy = false
+
+  versioning {
+    enabled = false
+  }
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 }
 
 # Grant Pub/Sub on GCS Service Account
@@ -109,6 +131,11 @@ resource "google_cloud_run_service" "podcast_processor" {
 
         env {
           name  = "GCS_BUCKET"
+          value = google_storage_bucket.podcast_cloudrun_files.name
+        }
+
+        env {
+          name  = "GCS_FILES_BUCKET"
           value = google_storage_bucket.podcast_files.name
         }
 
@@ -120,7 +147,7 @@ resource "google_cloud_run_service" "podcast_processor" {
         resources {
           limits = {
             memory = "512Mi"
-            cpu    = "1"
+            cpu    = "1000m"
           }
         }
       }
@@ -145,6 +172,12 @@ resource "google_cloud_run_service" "podcast_processor" {
     google_project_iam_member.podcast_gcs_admin,
     google_project_iam_member.podcast_run_invoker
   ]
+
+  lifecycle {
+    ignore_changes = [
+      template.0.metadata.0.annotations,
+    ]
+  }
 }
 
 # Allow unauthenticated access to Cloud Run service
@@ -158,11 +191,12 @@ resource "google_cloud_run_service_iam_member" "public_access" {
 # Enable required APIs
 resource "google_project_service" "required_apis" {
   for_each = toset([
+    "artifactregistry.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "eventarc.googleapis.com",
+    "iamcredentials.googleapis.com",
     "run.googleapis.com",
     "storage-api.googleapis.com",
-    "eventarc.googleapis.com",
-    "cloudscheduler.googleapis.com",
-    "artifactregistry.googleapis.com",
   ])
 
   service            = each.value
