@@ -81,6 +81,15 @@ resource "google_storage_bucket" "podcast_files" {
   uniform_bucket_level_access = true
 }
 
+# Grant Pub/Sub on GCS Service Account
+data "google_storage_project_service_account" "gcs_sa" {}
+
+resource "google_project_iam_member" "gcs_pubsub" {
+  project = var.project_id
+  role    = "roles/pubsub.publisher"
+  member  = data.google_storage_project_service_account.gcs_sa.member
+}
+
 # Cloud Run Service
 resource "google_cloud_run_service" "podcast_processor" {
   name     = var.service_name
@@ -160,57 +169,32 @@ resource "google_project_service" "required_apis" {
   disable_on_destroy = false
 }
 
-# Eventarc Trigger for GCS file uploads - DISABLED, using Cloud Scheduler instead
-# resource "google_eventarc_trigger" "podcast_upload" {
-#   name     = "${var.service_name}-upload-trigger"
-#   location = var.region
-#
-#   matching_criteria {
-#     attribute = "type"
-#     value     = "google.cloud.storage.object.v1.finalized"
-#   }
-#
-#   matching_criteria {
-#     attribute = "bucket"
-#     value     = google_storage_bucket.podcast_files.name
-#   }
-#
-#   destination {
-#     cloud_run_service {
-#       service = google_cloud_run_service.podcast_processor.name
-#       region  = var.region
-#     }
-#   }
-#
-#   service_account = google_service_account.podcast_processor.email
-#
-#   depends_on = [
-#     google_project_service.required_apis["eventarc.googleapis.com"],
-#     google_cloud_run_service.podcast_processor
-#   ]
-# }
+resource "google_eventarc_trigger" "podcast_upload" {
+  name     = "${var.service_name}-upload-trigger"
+  location = var.region
 
-# Cloud Scheduler for periodic processing
-resource "google_cloud_scheduler_job" "podcast_processor_schedule" {
-  name             = "${var.service_name}-schedule"
-  description      = "Trigger podcast processor hourly"
-  schedule         = "0 * * * *"  # Every hour
-  time_zone        = "UTC"
-  attempt_deadline = "1800s"  # 30 minutes max
-  region           = var.region
-  paused           = false
+  matching_criteria {
+    attribute = "type"
+    value     = "google.cloud.storage.object.v1.finalized"
+  }
 
-  http_target {
-    http_method = "POST"
-    uri         = "${google_cloud_run_service.podcast_processor.status[0].url}/process"
+  matching_criteria {
+    attribute = "bucket"
+    value     = google_storage_bucket.podcast_files.name
+  }
 
-    oidc_token {
-      service_account_email = google_service_account.podcast_processor.email
+  destination {
+    cloud_run_service {
+      service = google_cloud_run_service.podcast_processor.name
+      region  = var.region
+      path    = "/process"
     }
   }
 
+  service_account = google_service_account.podcast_processor.email
+
   depends_on = [
-    google_project_service.required_apis["cloudscheduler.googleapis.com"],
+    google_project_service.required_apis["eventarc.googleapis.com"],
     google_cloud_run_service.podcast_processor
   ]
 }

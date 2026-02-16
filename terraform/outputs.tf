@@ -13,9 +13,9 @@ output "gcs_bucket_name" {
   value       = google_storage_bucket.podcast_files.name
 }
 
-output "cloud_scheduler_job_name" {
-  description = "Cloud Scheduler job name"
-  value       = google_cloud_scheduler_job.podcast_processor_schedule.name
+output "eventarc_trigger_id" {
+  description = "Eventarc Trigger ID"
+  value       = google_eventarc_trigger.podcast_upload.id
 }
 
 output "podcast_feed_url" {
